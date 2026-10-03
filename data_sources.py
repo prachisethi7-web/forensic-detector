@@ -40,6 +40,58 @@ def _pick(df, labels, col):
     return None
 
 
+def _num(x):
+    try:
+        x = float(x)
+        return x if x == x and x > 0 else None
+    except Exception:
+        return None
+
+
+def get_market_cap(t, balance_sheet=None):
+    """Try several routes, because Yahoo's .info often fails on cloud servers. Returns (value, source) or (None, None)."""
+    try:
+        v = _num((t.info or {}).get("marketCap"))
+        if v:
+            return v, "Yahoo info"
+    except Exception:
+        pass
+    fi = None
+    try:
+        fi = t.fast_info
+    except Exception:
+        pass
+    if fi is not None:
+        def g(key):
+            for acc in (lambda: fi[key], lambda: getattr(fi, key)):
+                try:
+                    v = _num(acc())
+                    if v:
+                        return v
+                except Exception:
+                    pass
+            return None
+        v = g("market_cap")
+        if v:
+            return v, "Yahoo fast_info"
+        price, shares = g("last_price"), g("shares")
+        if price and shares:
+            return price * shares, "price x shares (fast_info)"
+    # last resort: latest close x share count from the balance sheet
+    try:
+        px = _num(t.history(period="5d")["Close"].dropna().iloc[-1])
+        bs = balance_sheet
+        if px and bs is not None:
+            for lab in ("Ordinary Shares Number", "Share Issued"):
+                if lab in bs.index:
+                    sh = _num(bs.loc[lab].dropna().iloc[0])
+                    if sh:
+                        return px * sh, "latest close x balance-sheet shares"
+    except Exception:
+        pass
+    return None, None
+
+
 def search_company(query):
     """Name or ticker -> list of {symbol, name, exchange}. NSE (.NS) / BSE (.BO) only."""
     import yfinance as yf
@@ -77,15 +129,12 @@ def get_financials(symbol):
             df = stm[kind]
             for target, col in ((cur, cols[0]), (pri, cols[1])):
                 target[key] = _pick(df, labels, col) if df is not None and col in df.columns else None
-        try:
-            mc = t.info.get("marketCap")
-        except Exception:
-            mc = None
-        cur["marketEquity"] = float(mc) if mc else None
+        mc, mc_src = get_market_cap(t, stm["bs"])
+        cur["marketEquity"] = mc
         pri["marketEquity"] = None
         missing = sorted({k for k, v in cur.items() if v is None} | {k for k, v in pri.items()
                          if v is None and k not in ("marketEquity", "totalLiab", "retainedEarnings")})
-        return {"prior": pri, "current": cur, "missing": missing,
+        return {"prior": pri, "current": cur, "missing": missing, "market_cap_source": mc_src,
                 "periods": (str(cols[1])[:10], str(cols[0])[:10])}
     except Exception:
         return None

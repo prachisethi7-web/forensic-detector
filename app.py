@@ -181,6 +181,18 @@ def page_company():
 
     with st.spinner("Fetching financial statements..."):
         fin = c_fin(sym)
+    if fin:
+        import copy
+        fin = copy.deepcopy(fin)
+        if fin["current"].get("marketEquity") is None:
+            st.warning("Yahoo did not return a market capitalisation, which Altman's X4 needs.")
+            mc_cr = st.number_input("Optional: enter market cap in Rs crore (find it on NSE, Screener or Google Finance)",
+                                    min_value=0.0, value=0.0, step=100.0, format="%.1f")
+            if mc_cr > 0:
+                fin["current"]["marketEquity"] = mc_cr * 1e7          # 1 crore = 10,000,000
+                fin["market_cap_source"] = "entered manually"
+        elif fin.get("market_cap_source"):
+            st.caption(f"Market cap source: {fin['market_cap_source']}")
     scores = compute_scores(fin) if fin else None
     with st.spinner("Checking NSE announcements..."):
         ann = c_ann(sym)
